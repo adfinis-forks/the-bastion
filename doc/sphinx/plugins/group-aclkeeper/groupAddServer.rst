@@ -36,10 +36,11 @@ Add an IP or IP block to a group's servers list
                                   must not specify --user in that case. However, for this protocol to be usable under a given
                                   remote user, access to the USER@HOST:PORT tuple must also be allowed.
                                   PROTO must be one of:
-                                  scpup    allow SCP upload, you--bastion-->server
-                                  scpdown  allow SCP download, you<--bastion--server
-                                  sftp     allow usage of the SFTP subsystem, through the bastion
-                                  rsync    allow usage of rsync, through the bastion
+                                  scpup        allow SCP upload, you--bastion-->server
+                                  scpdown      allow SCP download, you<--bastion--server
+                                  sftp         allow usage of the SFTP subsystem, through the bastion
+                                  rsync        allow usage of rsync, through the bastion
+                                  portforward  allow forwarding a remote port on the target server to a local port on the bastion
 .. option:: --force
 
    Don't try the ssh connection, just add the host to the group blindly
@@ -69,7 +70,11 @@ Add an IP or IP block to a group's servers list
    Proxy host port to connect to (mandatory when --proxy-host is specified)
 
   --proxy-user USER|PATTERN|*  Proxy user to connect as (mandatory when --proxy-host is specified).
-                                   Globbing characters '*' and '?' are supported for pattern matching.
+                                 Globbing characters '*' and '?' are supported for pattern matching.
+.. option:: --remote-port PORT
+
+   Allow port forwarding to the specified remote port on the target server.
+
 
 Examples::
 

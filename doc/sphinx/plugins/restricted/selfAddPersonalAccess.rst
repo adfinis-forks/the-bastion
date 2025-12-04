@@ -18,24 +18,25 @@ Add a personal server access to your account
 
    Host(s) to add access to, either a HOST which will be resolved to an IP immediately,
 
-                             or an IP, or a whole subnet using the PREFIX/SIZE notation
-  --user USER|PATTERN|*    Specify which remote user should be allowed to connect as.
-                             Globbing characters '*' and '?' are supported, so you can specify a pattern
-                             that will be matched against the actual remote user name.
-                             To allow any user, use '--user *' (you might need to escape '*' from your shell)
-  --port PORT|*            Remote port allowed to connect to
-                             To allow any port, use '--port *' (you might need to escape '*' from your shell)
+                                 or an IP, or a whole subnet using the PREFIX/SIZE notation
+  --user USER|PATTERN|*        Specify which remote user should be allowed to connect as.
+                                 Globbing characters '*' and '?' are supported, so you can specify a pattern
+                                 that will be matched against the actual remote user name.
+                                 To allow any user, use '--user *' (you might need to escape '*' from your shell)
+  --port PORT|*                Remote port allowed to connect to
+                                 To allow any port, use '--port *' (you might need to escape '*' from your shell)
 .. option:: --protocol PROTO
 
    Specify that a special protocol should be allowed for this HOST:PORT tuple, note that you
 
-                              must not specify --user in that case. However, for this protocol to be usable under a given
-                              remote user, access to the USER@HOST:PORT tuple must also be allowed.
-                              PROTO must be one of:
-                              scpupload    allow SCP upload, you--bastion-->server
-                              scpdownload  allow SCP download, you<--bastion--server
-                              sftp         allow usage of the SFTP subsystem, through the bastion
-                              rsync        allow usage of rsync, through the bastion
+                                  must not specify --user in that case. However, for this protocol to be usable under a given
+                                  remote user, access to the USER@HOST:PORT tuple must also be allowed.
+                                  PROTO must be one of:
+                                  scpupload    allow SCP upload, you--bastion-->server
+                                  scpdownload  allow SCP download, you<--bastion--server
+                                  sftp         allow usage of the SFTP subsystem, through the bastion
+                                  rsync        allow usage of rsync, through the bastion
+                                  portforward  allow forwarding a remote port on the target server to a local port on the bastion
 .. option:: --force
 
    Add the access without checking that the public SSH key is properly installed remotely
@@ -65,8 +66,11 @@ Add a personal server access to your account
    Proxy host port to connect to (mandatory when --proxy-host is specified)
 
   --proxy-user USER|PATTERN|*  Proxy user to connect as (mandatory when --proxy-host is specified).
-                               Globbing characters '*' and '?' are supported for pattern matching.
-                               When connecting via SSH (not plugins), defaults to --user value for convenience.
+                                 Globbing characters '*' and '?' are supported for pattern matching.
+.. option:: --remote-port PORT
+
+   Allow port forwarding to the specified remote port on the target server.
+
 
 Plugin configuration
 ====================

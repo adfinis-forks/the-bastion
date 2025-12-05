@@ -320,8 +320,11 @@ sub access_modify {
     my $proxyPort = $params{'proxyPort'};
     my $proxyUser = $params{'proxyUser'};
 
-    my $dryrun = $params{'dryrun'};      # don't do anything, just check params and prereqs
-    my $sudo   = $params{'sudo'};        # passed as-is to subs we use
+    my $remotePort = $params{'remotePort'};    # remote port for port forwarding
+    my $localPort  = $params{'localPort'};     # local port for port forwarding, only used for groupguest access. Otherwise it will be allocated automatically.
+
+    my $dryrun = $params{'dryrun'};            # don't do anything, just check params and prereqs
+    my $sudo   = $params{'sudo'};              # passed as-is to subs we use
 
     # deny accesses wider than these prefixes
     my %widestVxPrefix = (
@@ -479,6 +482,31 @@ sub access_modify {
         return R('ERR_INVALID_PARAMETER', msg => "When specifying a proxy port, proxy host must also be specified");
     }
 
+    # check port forwarding
+    if ($remotePort) {
+        $fnret = OVH::Bastion::is_valid_portforwarding(
+            action     => $action,
+            way        => $way,
+            account    => $account,
+            group      => $shortGroup,
+            remotePort => $remotePort
+        );
+        $fnret or return $fnret;
+        $remotePort = $fnret->value->{"remotePort"};
+
+        # if we add a groupguest, we can check the local port, too, because it was already allocated.
+        if ($way eq 'groupguest' && defined $localPort) {
+            $fnret = OVH::Bastion::is_valid_port(port => $localPort);
+            $fnret or return $fnret;
+            $localPort = $fnret->value;
+        }
+        else {
+            if (defined $localPort) {
+                return R('ERR_INVALID_PARAMETER', msg => "Local port can only be specified for way=groupguest");
+            }
+        }
+    }
+
     # check if the caller has the right to make the change they're asking
     # ... 1. either $> is allowkeeper and $ENV{'SUDO_USER'} is the requesting account
     # ... 2. or $> is $grouptomodify  and $ENV{'SUDO_USER'} is the requesting account
@@ -562,6 +590,7 @@ sub access_modify {
             proxyIp    => $proxyIp,
             proxyPort  => $proxyPort,
             proxyUser  => $proxyUser,
+            remotePort => $remotePort,
             exactMatch => 1,             # we're checking if the exact right we're asked to modify exists or not
         );
         osh_debug("... result is $fnret");
@@ -572,6 +601,31 @@ sub access_modify {
         elsif ($action eq 'del' and not $fnret) {
             return R('OK_NO_CHANGE', msg => "The requested access to delete was not found, no change made");
         }
+    }
+
+    # If we're adding an access with port forwarding, we need to allocate a local port
+    # This port must be unique across all account and group accesses, so we acquire a global lock to prevent any race condition
+    my $lock_fh;
+    if ($action eq 'add' && defined $remotePort && !defined $localPort) {
+        osh_debug("Acquiring port allocation lock for remotePort=$remotePort");
+        $fnret = OVH::Bastion::Helper::get_lock_fh(category => "portforwarding");
+        $fnret or return $fnret;
+        $lock_fh = $fnret->value;
+
+        $fnret = OVH::Bastion::Helper::acquire_lock($lock_fh);
+        $fnret or return $fnret;
+
+        # Now allocate a port while holding the lock
+        $fnret = OVH::Bastion::allocate_local_port();
+        if (!$fnret) {
+            # Release lock before returning error
+            close($lock_fh) if $lock_fh;
+            return $fnret;
+        }
+        $localPort = $fnret->value->{'localPort'};
+        osh_debug("Allocated new local port for forwarding: $localPort");
+
+        # We will release the lock after the access modification is done
     }
 
     # ok, now do the change, first define this sub
@@ -653,6 +707,14 @@ sub access_modify {
             if ($proxyUser) {
                 $entry .= " # PROXYUSER=" . $proxyUser;
             }
+            if ($remotePort) {
+                if (!defined $localPort) {
+                    # This should never happen but just in case something went horribly wrong, we abort
+                    return R('ERR_INTERNAL', msg => "Port forwarding requested but no local port allocated");
+                }
+                $entry .= " # REMOTEPORT=" . $remotePort;
+                $entry .= " # LOCALPORT=" . $localPort;
+            }
             if ($comment) {
                 $comment =~ s{[#<>\\"']}{_}g;
                 $entry .= " # COMMENT=<" . $comment . ">";
@@ -665,6 +727,7 @@ sub access_modify {
 
         # now, do the change
         my $returnmsg;
+        my $returnval = {};
         if ($action eq 'add') {
             osh_debug("going to add entry '$entry'");
             if (open(my $fh_file, '>>', $file)) {
@@ -675,16 +738,18 @@ sub access_modify {
                 return R('ERR_CANNOT_OPEN_FILE', msg => "Error opening $file: $!");
             }
             my $machine = OVH::Bastion::machine_display(
-                ip        => $ip,
-                port      => $port,
-                user      => $user,
-                proxyIp   => $proxyIp,
-                proxyPort => $proxyPort,
-                proxyUser => $proxyUser,
+                ip         => $ip,
+                port       => $port,
+                user       => $user,
+                proxyIp    => $proxyIp,
+                proxyPort  => $proxyPort,
+                proxyUser  => $proxyUser,
+                remotePort => $remotePort,
             )->value;
             my $ttlmsg =
               $ttl ? (' (expires in ' . OVH::Bastion::duration2human(seconds => $ttl)->value->{'human'} . ')') : '';
             $returnmsg = "Access to $machine successfully added$ttlmsg";
+            $returnval->{'localPort'} = $localPort if defined $localPort;
         }
         elsif ($action eq 'del') {
             if (open(my $fh_file, '<', $file)) {
@@ -716,6 +781,21 @@ sub access_modify {
                             $shouldDelete = 0;
                         }
 
+                        # validate portforwarding if defined
+                        if ($shouldDelete && defined $remotePort) {
+                            $shouldDelete = 0 unless $line =~ m{\# REMOTEPORT=\Q$remotePort\E(\s|$)};
+                        }
+                        elsif ($shouldDelete && $line =~ m{\# REMOTEPORT=}) {
+                            $shouldDelete = 0;
+                        }
+
+                        if ($shouldDelete && defined $remotePort) {
+                            # parse the local port so we can return it to the caller
+                            if ($line =~ s/# LOCALPORT=(\d+)//) {
+                                $returnval->{'localPort'} = $1;
+                            }
+                        }
+
                         if ($shouldDelete) {
                             chomp $line;
                             $line = "# $line # $comment\n";
@@ -733,12 +813,13 @@ sub access_modify {
                         print $fh_file $newFile;
                         close($fh_file);
                         my $machine = OVH::Bastion::machine_display(
-                            ip        => $ip,
-                            port      => $port,
-                            user      => $user,
-                            proxyIp   => $proxyIp,
-                            proxyPort => $proxyPort,
-                            proxyUser => $proxyUser,
+                            ip         => $ip,
+                            port       => $port,
+                            user       => $user,
+                            proxyIp    => $proxyIp,
+                            proxyPort  => $proxyPort,
+                            proxyUser  => $proxyUser,
+                            remotePort => $remotePort,
                         )->value;
                         $returnmsg = "Access to $machine successfully removed";
                     }
@@ -751,6 +832,7 @@ sub access_modify {
                 }
             }
         }
+
         OVH::Bastion::syslogFormatted(
             severity => 'info',
             type     => 'acl',
@@ -769,9 +851,11 @@ sub access_modify {
                 ['proxy_ip',       $params{'proxyIp'}],
                 ['proxy_port',     $params{'proxyPort'}],
                 ['proxy_user',     $params{'proxyUser'}],
+                ['remote_port',    $params{'remotePort'}],
+                ['local_port',     $localPort],
             ]
         );
-        return R('OK', msg => $returnmsg) if $returnmsg;
+        return R('OK', msg => $returnmsg, value => $returnval) if $returnmsg;
         return R('ERR_INTERNAL');
     };    # end of sub definition
 
@@ -789,6 +873,10 @@ sub access_modify {
         $ret = $_access_modify_file->(%params, file => "/home/allowkeeper/$sysaccount/$prefix.partial.$shortGroup");
     }
     osh_debug("_access_modify_file() said $ret");
+
+    # Release the port allocation lock after the file has been written
+    close($lock_fh) if $lock_fh;
+
     return $ret if defined $ret;
 
     return R('ERR_INTERNAL');    # unreachable

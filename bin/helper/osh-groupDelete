@@ -83,7 +83,7 @@ $fnret = OVH::Bastion::get_acl_way(way => 'group', group => $shortGroup);
 if ($fnret) {
     @pfLocalPorts = map { $_->{'localPort'} } grep { defined $_->{'localPort'} } @{$fnret->value || []};
 }
-my @pfAccounts;
+my %pfAccounts;
 
 # do the stuff
 osh_info("Backing up group directory...");
@@ -186,13 +186,11 @@ if (opendir($dh, "/home/allowkeeper")) {
     while (my $dir = readdir($dh)) {
         $dir =~ /^\./                 and next;
         $dir !~ /^([a-zA-Z0-9._-]+)$/ and next;
-        my $dirAccount = $1;
         $dir = "/home/allowkeeper/$1";    # and untaint
         -d $dir or next;
-        push @pfAccounts, $dirAccount
-          if grep { -e $_ || -l $_ } "$dir/allowed.ip.$shortGroup", "$dir/allowed.partial.$shortGroup";
         foreach my $file ("$dir/allowed.ip.$shortGroup", "$dir/allowed.partial.$shortGroup") {
             if (-e $file || -l $file) {
+                $pfAccounts{basename($dir)} = 1;
                 osh_info "Removing $file...";
                 if (!unlink($file)) {
                     warn_syslog("Couldn't remove symlink '$file': $!");
@@ -265,7 +263,7 @@ if (@pfLocalPorts) {
     $fnret = OVH::Bastion::Helper::acquire_lock($pfLock_fh);
     $fnret or HEXIT($fnret);
 
-    foreach my $account (@pfAccounts) {
+    foreach my $account (sort keys %pfAccounts) {
         $fnret = OVH::Bastion::generate_account_sshd_forwarding_config(account => $account);
         if (!$fnret) {
             warn_syslog("Error during group deletion of '$group', couldn't regenerate sshd config of '$account': "
